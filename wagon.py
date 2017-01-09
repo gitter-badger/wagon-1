@@ -37,10 +37,12 @@ from distutils.spawn import find_executable
 try:
     import urllib.error
     from urllib.request import urlopen
+    from urllib.request import urljoin
     from urllib.request import URLopener
 except ImportError:
     import urllib
     from urllib import urlopen
+    from urllib import urljoin
     from urllib import URLopener
 
 try:
@@ -65,7 +67,9 @@ IS_PY3 = sys.version_info[:2] > (2, 7)
 METADATA_FILE_NAME = 'package.json'
 DEFAULT_WHEELS_PATH = 'wheels'
 
-DEFAULT_INDEX_SOURCE_URL_TEMPLATE = 'https://pypi.python.org/pypi/{0}/json'
+PYPI_INDEX_URL = 'https://pypi.python.org/'
+PYPI_PACKAGE_URL_TEMPLATE = urljoin(PYPI_INDEX_URL, 'pypi/{0}/json')
+
 IS_VIRTUALENV = hasattr(sys, 'real_prefix')
 
 PLATFORM = sys.platform
@@ -470,8 +474,8 @@ def _make_virtualenv():
     return virtualenv_dir
 
 
-def _get_package_info_from_pypi(source):
-    pypi_url = DEFAULT_INDEX_SOURCE_URL_TEMPLATE.format(source)
+def _get_package_info_from_pypi(source, index_url=None):
+    pypi_url = index_url or PYPI_PACKAGE_URL_TEMPLATE.format(source)
     if is_verbose():
         logger.debug('Getting metadata for %s from %s...', source, pypi_url)
     package_data = json.loads(_http_request(pypi_url))
@@ -583,7 +587,7 @@ def _set_archive_name(package_name,
     return archive_name
 
 
-def get_source_name_and_version(source):
+def get_source_name_and_version(source, index_url):
     """Retrieve the source package's name and version.
 
     If the source is a path, the name and version will be retrieved
@@ -602,9 +606,10 @@ def get_source_name_and_version(source):
     # elif any(symbol in source for symbol in ['==', '>=', '<=']):
     elif '==' in source:
         base_name, package_version = source.split('==')
-        package_name = _get_package_info_from_pypi(base_name)['name']
+        package_name = \
+            _get_package_info_from_pypi(base_name, index_url)['name']
     else:
-        package_info = _get_package_info_from_pypi(source)
+        package_info = _get_package_info_from_pypi(source, index_url)
         package_name = package_info['name']
         package_version = package_info['version']
     return package_name, package_version
@@ -621,7 +626,7 @@ def _create_wagon_archive(source_path, archive_path, archive_format='tar.gz'):
             '(Must be one of [zip, tar.gz]).'.format(archive_format.lower()))
 
 
-def get_source(source):
+def get_source(source, index_url=None):
     """Return a pip-installable source
 
     If the source is a url to a package's tar file,
@@ -670,10 +675,10 @@ def get_source(source):
         source = os.path.expanduser(source)
     elif '==' in source:
         base_name, version = source.split('==')
-        source = _get_package_info_from_pypi(base_name)['name']
+        source = _get_package_info_from_pypi(base_name, index_url)['name']
         source = '{0}=={1}'.format(source, version)
     else:
-        source = _get_package_info_from_pypi(source)['name']
+        source = _get_package_info_from_pypi(source, index_url)['name']
     logger.debug('Source is: %s', source)
     return source
 
@@ -692,7 +697,8 @@ def create(source,
            python_versions=None,
            validate_archive=False,
            wheel_args='',
-           format='tar.gz'):
+           format='tar.gz',
+           index_url=PYPI_INDEX_URL):
     """Create a Wagon archive and returns its path.
 
     This currently only creates tar.gz archives. The `install`
@@ -712,13 +718,13 @@ def create(source,
     or the local path provided provided in `source`.
     """
     logger.info('Creating archive for %s...', source)
-    processed_source = get_source(source)
+    processed_source = get_source(source, index_url)
     if os.path.isdir(processed_source) and not \
             os.path.isfile(os.path.join(processed_source, 'setup.py')):
         raise WagonError(
             'Source directory must contain a setup.py file')
     package_name, package_version = get_source_name_and_version(
-        processed_source)
+        processed_source, index_url)
 
     tempdir = tempfile.mkdtemp()
     workdir = os.path.join(tempdir, package_name)
@@ -1116,6 +1122,15 @@ def _add_create_command(parser):
         required=False,
         help='Allows to pass additional arguments to `pip wheel`. '
              '(e.g. --no-cache-dir -c constains.txt)')
+    command.add_argument(
+        '-i', '--index-url', '--pypi-url',
+        dest='index_url',
+        metavar='URL',
+        default=PYPI_INDEX_URL,
+        help='Base URL of Python Package Index. '
+             'This should point to a repository compliant with PEP 503 '
+             '(the simple repository API) or a local directory laid out '
+             'in the same format.')
 
     _set_defaults(command, func=_create_wagon)
     return parser
